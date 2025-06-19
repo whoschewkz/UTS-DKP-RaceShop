@@ -2,12 +2,23 @@ import datetime
 import uuid
 import os
 import time
+import logging
 
 from flask import Flask, request, render_template, make_response, redirect
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-
 from peewee import *
+
+# --------------------- LOGGING SETUP ---------------------
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),              # tampilkan di terminal
+        logging.FileHandler("race_shop.log")  # simpan ke file
+    ]
+)
 
 # --------------------- DATABASE SETUP ---------------------
 
@@ -82,13 +93,16 @@ class API:
                     token=token,
                     balance=20,
                 )
+                logging.info(f"[LOGIN] ✅ New user created: {username}")
             except IntegrityError as e:
-                print(e)
+                logging.error(f"[LOGIN] ❌ DB error on create user: {e}")
                 return ""
             return token
         user_obj = user_objs[0]
         if user_obj.password != password:
+            logging.warning(f"[LOGIN] ❌ Failed login for {username}")
             return ""
+        logging.info(f"[LOGIN] ✅ Successful login for {username}")
         return user_obj.token
 
     @staticmethod
@@ -114,6 +128,7 @@ class API:
     def buy(product_id: int, token: str) -> (bool, str):
         user_obj = API.get_user_by_token(token)
         if not user_obj:
+            logging.warning(f"[BUY] ❌ Unauthorized attempt.")
             return False, "Unauthorized"
 
         product_objs = Product.select().where(Product.id == product_id)
@@ -122,6 +137,7 @@ class API:
         product_obj = product_objs[0]
 
         if product_obj.price > user_obj.balance:
+            logging.info(f"[BUY] ❌ User {user_obj.username} insufficient funds for {product_obj.name}")
             return False, "No money you have bro..."
 
         try:
@@ -132,8 +148,9 @@ class API:
                     paid_amount=product_obj.price
                 )
                 User.update(balance=user_obj.balance - product_obj.price).where(User.id == user_obj.id).execute()
+                logging.info(f"[BUY] 🛒 {user_obj.username} bought {product_obj.name} for ${product_obj.price}")
         except IntegrityError as e:
-            print(e)
+            logging.error(f"[BUY] ❌ DB error: {e}")
             return False, "System error"
 
         return True, ""
@@ -152,9 +169,10 @@ class API:
                 return False, "No such purchase"
 
             if purchase_history_obj.user_id != user_obj.id:
+                logging.warning(f"[SELL] ❌ {user_obj.username} tried to sell purchase not theirs")
                 return False, "You don't own this item"
 
-            time.sleep(0.1)  # slow down attack
+            time.sleep(0.1)  # slow down attackers
 
             rows_deleted = PurchaseLog.delete().where(PurchaseLog.id == purchase_id).execute()
             if rows_deleted == 0:
@@ -164,10 +182,10 @@ class API:
             User.update(balance=user_obj.balance + purchase_history_obj.paid_amount) \
                 .where(User.id == user_obj.id).execute()
 
-            print(f"[SELL] ✅ User {user_obj.username} sold purchase_id={purchase_id}, paid={purchase_history_obj.paid_amount}, new balance={user_obj.balance + purchase_history_obj.paid_amount}", flush=True)
+            logging.info(f"[SELL] ✅ {user_obj.username} sold item {purchase_id} for ${purchase_history_obj.paid_amount}, new balance={user_obj.balance + purchase_history_obj.paid_amount}")
 
             if purchase_history_obj.paid_amount == 21:
-                print(f"[SELL] 🏁 FLAG ACCESS ATTEMPT by {user_obj.username}", flush=True)
+                logging.warning(f"[SELL] 🏁 FLAG ACCESS ATTEMPT by {user_obj.username}")
                 return False, f"Well, flag is {os.getenv('FLAG')}"
 
             return True, ""
